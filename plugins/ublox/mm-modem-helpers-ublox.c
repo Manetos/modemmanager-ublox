@@ -40,10 +40,10 @@ mm_ublox_parse_upincnt_response (const gchar  *response,
     guint       puk2_attempts = 0;
     gboolean    success = TRUE;
 
-    g_assert (pin_attempts);
-    g_assert (pin2_attempts);
-    g_assert (puk_attempts);
-    g_assert (puk2_attempts);
+    g_assert (out_pin_attempts);
+    g_assert (out_pin2_attempts);
+    g_assert (out_puk_attempts);
+    g_assert (out_puk2_attempts);
 
     /* Response may be e.g.:
      * +UPINCNT: 3,3,10,10
