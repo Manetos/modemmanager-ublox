@@ -242,6 +242,74 @@ out:
 }
 
 /*****************************************************************************/
+/* CFUN? response parser */
+
+gboolean
+mm_ublox_parse_cfun_response (const gchar        *response,
+                              MMModemPowerState  *out_state,
+                              GError            **error)
+{
+    GRegex            *r;
+    GMatchInfo        *match_info;
+    GError            *inner_error = NULL;
+    MMModemPowerState  state = MM_MODEM_POWER_STATE_UNKNOWN;
+
+    g_assert (out_state != NULL);
+
+    /* Response may be e.g.:
+     * +CFUN: 1,0
+     *   ..but we don't care about the second number
+     */
+    r = g_regex_new ("\\+CFUN: (\\d+)(?:,(?:\\d+))?(?:\\r\\n)?", 0, 0, NULL);
+    g_assert (r != NULL);
+
+    g_regex_match_full (r, response, strlen (response), 0, 0, &match_info, &inner_error);
+    if (!inner_error && g_match_info_matches (match_info)) {
+        guint value = 0;
+
+        if (!mm_get_uint_from_match_info (match_info, 1, &value)) {
+            inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                       "Couldn't read power state value");
+            goto out;
+        }
+
+        switch (value) {
+        case 1:
+            state = MM_MODEM_POWER_STATE_ON;
+            break;
+        case 0:
+            /* minimum functionality */
+        case 4:
+            /* airplane mode */
+        case 19:
+            /* minimum functionality with SIM deactivated */
+            state = MM_MODEM_POWER_STATE_LOW;
+            break;
+        }
+    }
+
+out:
+
+    if (match_info)
+        g_match_info_free (match_info);
+    g_regex_unref (r);
+
+    if (inner_error) {
+        g_propagate_error (error, inner_error);
+        return FALSE;
+    }
+
+    if (state == MM_MODEM_POWER_STATE_UNKNOWN) {
+        inner_error = g_error_new (MM_CORE_ERROR, MM_CORE_ERROR_FAILED,
+                                   "Couldn't parse +CFUN response: %s", response);
+        return FALSE;
+    }
+
+    *out_state = state;
+    return TRUE;
+}
+
+/*****************************************************************************/
 /* URAT=? response parser */
 
 /* Index of the array is the ublox-specific value */
