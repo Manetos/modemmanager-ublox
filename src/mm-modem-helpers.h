@@ -253,6 +253,16 @@ gboolean mm_3gpp_parse_cgcontrdp_response (const gchar  *response,
                                            gchar       **out_dns_secondary_address,
                                            GError      **error);
 
+/* +CESQ response parser */
+gboolean mm_3gpp_parse_cesq_response (const gchar  *response,
+                                      guint        *out_rxlev,
+                                      guint        *out_ber,
+                                      guint        *out_rscp,
+                                      guint        *out_ecn0,
+                                      guint        *out_rsrq,
+                                      guint        *out_rsrp,
+                                      GError      **error);
+
 /* Additional 3GPP-specific helpers */
 
 MMModem3gppFacility mm_3gpp_acronym_to_facility (const gchar *str);
