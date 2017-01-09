@@ -826,14 +826,20 @@ create_bearer_step (GTask *task)
     case CREATE_BEARER_STEP_CHECK_MODE:
         if (!ctx->self->priv->mode_checked) {
             mm_dbg ("u-blox: checking current networking mode...");
-            mm_base_modem_at_command (
-                MM_BASE_MODEM (ctx->self),
-                "+UBMCONF?",
-                3,
-                FALSE,
-                (GAsyncReadyCallback) mode_check_ready,
-                task);
-            return;
+            if (g_str_has_prefix (mm_iface_modem_get_model ( MM_IFACE_MODEM(ctx->self) ), "SARA-U")) {
+                ctx->self->priv->mode = MM_UBLOX_NETWORKING_MODE_BRIDGE;
+                ctx->self->priv->mode_checked = TRUE;
+            }
+            else {
+                mm_base_modem_at_command (
+                    MM_BASE_MODEM (ctx->self),
+                    "+UBMCONF?",
+                    3,
+                    FALSE,
+                    (GAsyncReadyCallback) mode_check_ready,
+                    task);
+                return;
+            }
         }
         ctx->step++;
         /* fall down */

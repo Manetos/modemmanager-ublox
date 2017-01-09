@@ -28,6 +28,8 @@
 
 #include "mm-broadband-bearer-ublox.h"
 #include "mm-base-modem-at.h"
+#include "mm-iface-modem.h"
+#include "mm-iface-modem-3gpp.h"
 #include "mm-log.h"
 #include "mm-ublox-enums-types.h"
 #include "mm-modem-helpers.h"
@@ -213,6 +215,7 @@ cgcontrdp_ready (MMBaseModem  *modem,
     complete_get_ip_config_3gpp (task);
 }
 
+
 static void
 uipaddr_ready (MMBaseModem  *modem,
                GAsyncResult *res,
@@ -282,25 +285,34 @@ get_ip_config_3gpp (MMBroadbandBearer   *self,
     ctx = (CommonConnectContext *) g_task_get_task_data (task);
     ctx->ip_config = mm_bearer_ip_config_new ();
 
-    /* If we're in BRIDGE mode, we need to ask for static IP addressing details:
+    /* If we're in BRIDGE mode on a TOBY module, we need to ask for static IP addressing details:
      *  - AT+UIPADDR=[CID] will give us the default gateway address.
      *  - +CGCONTRDP?[CID] will give us the IP address, subnet and DNS addresses.
+     *
+     *  On a SARA module, we only need to call
+     *  AT+UCEDATA=[CID],0 to initate the data connection, can take up to 3 min!
      */
     if (ctx->self->priv->mode == MM_UBLOX_NETWORKING_MODE_BRIDGE) {
-        gchar *cmd;
+        if (g_str_has_prefix (mm_iface_modem_get_model ( MM_IFACE_MODEM(ctx->modem) ), "SARA-U")) {
+            mm_bearer_ip_config_set_method (ctx->ip_config, MM_BEARER_IP_METHOD_DHCP);
+            complete_get_ip_config_3gpp (task);
+            return;
+        } else {
+            gchar *cmd;
 
-        mm_bearer_ip_config_set_method (ctx->ip_config, MM_BEARER_IP_METHOD_STATIC);
+            mm_bearer_ip_config_set_method (ctx->ip_config, MM_BEARER_IP_METHOD_STATIC);
 
-        cmd = g_strdup_printf ("+UIPADDR=%u", cid);
-        mm_dbg ("gathering gateway information for PDP context #%u...", cid);
-        mm_base_modem_at_command (MM_BASE_MODEM (modem),
-                                  cmd,
-                                  10,
-                                  FALSE,
-                                  (GAsyncReadyCallback) uipaddr_ready,
-                                  task);
-        g_free (cmd);
-        return;
+            cmd = g_strdup_printf ("+UIPADDR=%u", cid);
+            mm_dbg ("gathering gateway information for PDP context #%u...", cid);
+            mm_base_modem_at_command (MM_BASE_MODEM (modem),
+                                      cmd,
+                                      10,
+                                      FALSE,
+                                      (GAsyncReadyCallback) uipaddr_ready,
+                                      task);
+            g_free (cmd);
+            return;
+        }
     }
 
     /* If we're in ROUTER networking mode, we just need to request DHCP on the
@@ -345,6 +357,28 @@ cgact_activate_ready (MMBaseModem  *modem,
 }
 
 static void
+ucedata_completed ( MMBaseModem *self,
+                    GAsyncResult *res,
+                    GTask        *task)
+{
+    const gchar *response;
+    GError      *error = NULL;
+    CommonConnectContext *ctx;
+
+    response = mm_base_modem_at_command_finish (self, res, &error);
+    if (!response) {
+        mm_dbg ("An error was received: %s", error->message);
+        g_task_return_error (task, error);
+    } else {
+        ctx = (CommonConnectContext *) g_task_get_task_data (task);
+        mm_bearer_ip_config_set_method (ctx->ip_config, MM_BEARER_IP_METHOD_DHCP);
+        mm_dbg ("data connection established");
+        g_task_return_pointer (task, g_object_ref (ctx->data), (GDestroyNotify) g_object_unref);
+    }
+    g_object_unref (task);
+}
+
+static void
 activate_3gpp (GTask *task)
 {
     CommonConnectContext *ctx;
@@ -352,15 +386,32 @@ activate_3gpp (GTask *task)
 
     ctx = (CommonConnectContext *) g_task_get_task_data (task);
 
-    cmd = g_strdup_printf ("+CGACT=1,%u", ctx->cid);
-    mm_dbg ("activating PDP context #%u...", ctx->cid);
-    mm_base_modem_at_command (MM_BASE_MODEM (ctx->modem),
-                              cmd,
-                              120,
-                              FALSE,
-                              (GAsyncReadyCallback) cgact_activate_ready,
-                              task);
-    g_free (cmd);
+    if ((ctx->self->priv->mode == MM_UBLOX_NETWORKING_MODE_BRIDGE) &&
+        (g_str_has_prefix (mm_iface_modem_get_model ( MM_IFACE_MODEM(ctx->modem) ), "SARA-U"))) 
+    {
+            gchar *cmd;
+
+            cmd = g_strdup_printf ("+UCEDATA=%u,0", ctx->cid);
+            mm_dbg ("initiating data connection for PDP context #%u...", ctx->cid);
+            mm_base_modem_at_command (MM_BASE_MODEM (ctx->modem),
+                                      cmd,
+                                      190,
+                                      FALSE,
+                                      (GAsyncReadyCallback) ucedata_completed,
+                                      task);
+            g_free (cmd);
+    
+    } else {
+        cmd = g_strdup_printf ("+CGACT=1,%u", ctx->cid);
+        mm_dbg ("activating PDP context #%u...", ctx->cid);
+        mm_base_modem_at_command (MM_BASE_MODEM (ctx->modem),
+                                  cmd,
+                                  120,
+                                  FALSE,
+                                  (GAsyncReadyCallback) cgact_activate_ready,
+                                  task);
+        g_free (cmd);
+    }
 }
 
 static void
@@ -376,9 +427,13 @@ uauthreq_ready (MMBaseModem  *modem,
 
     response = mm_base_modem_at_command_finish (modem, res, &error);
     if (!response) {
-        g_task_return_error (task, error);
+        mm_info("An error occured during uauthreq: %s", error->message);
+        mm_info("Will continue with set up anyway.");
+        g_error_free (error);
+
+        /*g_task_return_error (task, error);
         g_object_unref (task);
-        return;
+        return;*/
     }
 
     activate_3gpp (task);
